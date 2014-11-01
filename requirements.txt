@@ -1,0 +1,6 @@
+PyYAML==3.11
+gevent==1.0.1
+gevent-websocket
+greenlet==0.4.5
+msgpack-python
+websocket-client
