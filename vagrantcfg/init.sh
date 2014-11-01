@@ -10,7 +10,12 @@ cp /vagrant/vagrantcfg/minion /etc/salt/minion
 /etc/init.d/salt-master restart
 /etc/init.d/salt-minion restart
 
-salt-key -A -y
+
 
 # Python configuration
 pip install -r /vagrant/requirements.txt
+
+# Testing modules
+pip install websocket-client ipython
+
+salt-key -A -y

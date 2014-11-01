@@ -32,6 +32,21 @@ class ClientWrapper():
 
         return token
 
+    def cmd(self, cmdmesg):
+        cdict = {
+            'mode': 'sync',
+            'timeout': 30
+        }
+        # TODO: async?
+        cdict['fun'] = cmdmesg['method']
+        cdict['tgt'] = cmdmesg['pattern']
+        cdict['expr_form'] = cmdmesg.get('pattern_type', 'glob')
+        cdict['kwarg'] = cmdmesg.get('kwargs', {})
+        cdict['arg'] = cmdmesg.get('args', [])
+        cdict['token'] = cmdmesg['token']
+        retval = self.SaltClient.run(cdict)
+        return retval
+
 
 class SocketApplication(WebSocketApplication):
 
@@ -49,13 +64,45 @@ class SocketApplication(WebSocketApplication):
         t = Client.auth(message['username'], message['password'], message.get('eauth', 'pam'))
         self.ws.send(json.dumps(t))
 
+    def runner_message(self, message):
+        pass
+
+    def cmd_message(self, message):
+        e = []
+        if 'method' not in message:
+            e.append('method field missing')
+        if 'pattern' not in message:
+            e.append('pattern field missing')
+        if 'token' not in message:
+            e.append('token missing')
+        if len(e) != 0:
+            raise InvalidMessage("Missing fields", e)
+        resp = Client.cmd(message)
+        self.ws.send(json.dumps(resp))
+
+    def subscribe_message(self, message):
+        pass
+
+    def _event_stream(self):
+        pass
+
+    def signature_message(self, message):
+        pass
+
     def on_message(self, message):
         print message
         deser = json.loads(message)
         try:
             if deser['type'] == 'auth':
                 self.auth_message(deser)
-
+            elif deser['type'] == 'cmd':
+                self.cmd_message(deser)
+            elif deser['type'] == 'subscribe':
+                self.subscribe_message(deser)
+            elif deser['type'] == 'signature':
+                self.signature_message(deser)
+            elif deser['type'] == 'runner':
+                self.runner_message(deser)
         except Exception as e:
             emsg = {
                 'error': 'Invalid Message.',
@@ -66,8 +113,9 @@ class SocketApplication(WebSocketApplication):
     def on_close(self, reason):
         print reason
 
-Client = ClientWrapper()
-WebSocketServer(
-    ('', 8000),
-    Resource({'/': SocketApplication})
-).serve_forever()
+if __name__ == '__main__':
+    Client = ClientWrapper()
+    WebSocketServer(
+        ('', 8000),
+        Resource({'/': SocketApplication})
+    ).serve_forever()
