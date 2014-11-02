@@ -1,18 +1,17 @@
+from gevent.monkey import patch_all
+patch_all()
+from gevent import Greenlet, sleep
 import os
 from geventwebsocket import WebSocketServer, WebSocketApplication, Resource
-from ClientWrapper import ClientWrapper
 import json
 import logging
+from salt.client.api import APIClient
 
 
 class InvalidMessage(Exception):
     def __init__(self, message, errors):
         super(InvalidMessage, self).__init__(message)
         self.errors = errors
-
-__virtualname__ = 'websocket'
-log = logging.getLogger(__virtualname__)
-Client = ClientWrapper()
 
 
 def __virtual__():
@@ -49,10 +48,66 @@ def start():
     ).serve_forever()
 
 
+def greenlet_events(wss):
+        stream = wss.SaltClient.event.iter_events(full=True)
+        while True:
+            data = stream.next()
+            if data:
+                try:
+                    wss.broadcast_event(data)
+                except UnicodeDecodeError:
+                    log.error("Non UTF-8 data in event.")
+            sleep(0.1)
+
+__virtualname__ = 'websocket'
+log = logging.getLogger(__virtualname__)
+if '__opts__' not in globals():
+        __opts__ = get_opts()
+
+
 class SocketApplication(WebSocketApplication):
 
-    susbscribed_events = False
-    susbscribed_jobs = False
+    event_listeners = []
+    job_listeners = []
+
+    def __init__(self, *args, **kwargs):
+        self.SaltClient = APIClient()
+        Greenlet.spawn(greenlet_events, self)
+        super(SocketApplication, self).__init__(*args, **kwargs)
+
+    def broadcast_event(self, e):
+        for client in self.event_listeners:
+            client.ws.send(json.dumps(e))
+
+    def auth(self, username, password, eauth='pam'):
+        '''Authenticates a user against external auth and returns a token.'''
+        try:
+            token = self.SaltClient.create_token({
+                'username': username,
+                'password': password,
+                'eauth': eauth
+            })
+        except:
+            token = {
+                'error': 'Invalid credentials',
+                'details': 'Authentication failed with provided credentials.'
+            }
+
+        return token
+
+    def cmd(self, cmdmesg):
+        cdict = {
+            'mode': 'async'
+        }
+        # TODO: async?
+        cdict['fun'] = cmdmesg['method']
+        cdict['tgt'] = cmdmesg['pattern']
+        cdict['expr_form'] = cmdmesg.get('pattern_type', 'glob')
+        cdict['kwarg'] = cmdmesg.get('kwargs', {})
+        cdict['arg'] = cmdmesg.get('args', [])
+        cdict['token'] = cmdmesg['token']
+        retval = self.SaltClient.run(cdict)
+        return retval
 
     def on_open(self):
         print "Connection opened"
@@ -65,7 +120,7 @@ class SocketApplication(WebSocketApplication):
             e.append("username field missing")
         if len(e) != 0:
             raise InvalidMessage("Missing fields", e)
-        t = Client.auth(message['username'], message['password'], message.get('eauth', 'pam'))
+        t = self.auth(message['username'], message['password'], message.get('eauth', 'pam'))
         self.ws.send(json.dumps(t))
 
     def runner_message(self, message):
@@ -81,28 +136,54 @@ class SocketApplication(WebSocketApplication):
             e.append('token missing')
         if len(e) != 0:
             raise InvalidMessage("Missing fields", e)
-        resp = Client.cmd(message)
+        resp = self.cmd(message)
         self.ws.send(json.dumps(resp))
 
     def subscribe_message(self, message):
-        pass
+        '''This subscribes the socket to all events.'''
+        e = []
+        if 'subscription' not in message:
+            e.append('subscription field missing')
+        if len(e) != 0:
+            raise InvalidMessage("Missing fields", e)
+        if message['subscription'] == 'event':
+            self.event_listeners.append(self.ws.handler.active_client)
+        elif message['subscription'] == 'job':
+            self.susbscribed_jobs = True
+        else:
+            raise InvalidMessage("Unknown subscription type.")
 
-    def _event_stream(self):
-        pass
+    def unsubscribe_message(self, message):
+        '''This unsubscribes the socket to all events.'''
+        e = []
+        if 'subscription' not in message:
+            e.append('subscription field missing')
+        if len(e) != 0:
+            raise InvalidMessage("Missing fields", e)
+        if message['subscription'] == 'event':
+                self.event_listeners.remove(self.ws.handler.active_client)
+        elif message['subscription'] == 'job':
+            if self.job_greenlet:
+                self.job_greenlet.kill()
+        else:
+            raise InvalidMessage("Unknown subscription type.")
 
     def signature_message(self, message):
         pass
 
     def on_message(self, message):
+        print repr(self.ws.handler.active_client.address)
         print message
-        deser = json.loads(message)
         try:
+            deser = json.loads(message)
             if deser['type'] == 'auth':
                 self.auth_message(deser)
             elif deser['type'] == 'cmd':
                 self.cmd_message(deser)
             elif deser['type'] == 'subscribe':
                 self.subscribe_message(deser)
+            elif deser['type'] == 'unsubscribe':
+                self.unsubscribe_message(deser)
             elif deser['type'] == 'signature':
                 self.signature_message(deser)
             elif deser['type'] == 'runner':

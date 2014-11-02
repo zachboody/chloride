@@ -24,13 +24,12 @@ class ClientWrapper():
 
         return token
 
-    def get_event(tag):
-        pass
+    def get_event(self, tag=''):
+        self.SaltClient.get_event(tag)
 
     def cmd(self, cmdmesg):
         cdict = {
-            'mode': 'sync',
-            'timeout': 30
+            'mode': 'async'
         }
         # TODO: async?
         cdict['fun'] = cmdmesg['method']
