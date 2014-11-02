@@ -530,3 +530,6 @@ external_auth:
       - .*
       - '@runner'
       - '@wheel'
+
+websocket:
+  port: 8000

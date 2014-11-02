@@ -62,10 +62,10 @@ Example message:
 ```
 {
 	'type': 'cmd',
-	'method': 'test.ping'
-	'args': [],
-	'pattern': '*'
-	'pattern_type': 'glob'
+	'method': 'test.ping',
+	'pattern': '*',
+	'pattern_type': 'glob',
+	'token': 'a2822c3247c15755c7e17fa5686d40c7'
 }
 
 There are a few moving pieces to this format.
