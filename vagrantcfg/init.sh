@@ -1,6 +1,8 @@
 #!/bin/bash
 # Salt configuration
 
+sudo add-apt-repository ppa:saltstack/salt
+
 apt-get update
 apt-get install python-pip build-essential salt-master python-dev salt-minion -y
 

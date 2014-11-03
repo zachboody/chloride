@@ -1,6 +1,8 @@
 from gevent.monkey import patch_all
 patch_all()
 from gevent import Greenlet, sleep
+from multiprocessing import Process, Queue
+from multiprocessing.queues import Empty
 import os
 from geventwebsocket import WebSocketServer, WebSocketApplication, Resource
 import json
@@ -48,16 +50,35 @@ def start():
     ).serve_forever()
 
 
-def greenlet_events(wss):
-        stream = wss.SaltClient.event.iter_events(full=True)
+def subprocess_read_events(q):
+    from salt.client.api import APIClient
+    import json
+    from time import sleep
+
+    client = APIClient()
+    stream = client.event.iter_events(full=True)
+    while True:
+        data = stream.next()
+        if data:
+            try:
+                q.put(json.dumps(data))
+            except UnicodeDecodeError:
+                pass
+        sleep(0.1)
+
+
+def process_events(wss):
         while True:
-            data = stream.next()
-            if data:
+            try:
+                d = wss.event_queue.get_nowait()
+            except Empty:
+                sleep(0.2)
+                continue
+            if d:
                 try:
-                    wss.broadcast_event(data)
+                    wss.broadcast_event(d)
                 except UnicodeDecodeError:
                     log.error("Non UTF-8 data in event.")
-            sleep(0.1)
 
 __virtualname__ = 'websocket'
 log = logging.getLogger(__virtualname__)
@@ -69,11 +90,19 @@ class SocketApplication(WebSocketApplication):
 
     event_listeners = []
     job_listeners = []
+    event_queue = Queue()
 
     def __init__(self, *args, **kwargs):
         self.SaltClient = APIClient()
-        # Greenlet.spawn(greenlet_events, self)
+        self.event_listener_proc = Process(target=subprocess_read_events, args=(self.event_queue,))
+        self.event_listener_proc.start()
+        self.event_processor = Greenlet.spawn(process_events, self)
         super(SocketApplication, self).__init__(*args, **kwargs)
+
+    def __del__(self, *args, **kwargs):
+        self.event_listener_proc.kill()
+        self.event_processor.kill()
+        super(SocketApplication, self).__del__(*args, **kwargs)
 
     def auth(self, username, password, eauth='pam'):
         '''Authenticates a user against external auth and returns a token.'''
@@ -110,21 +139,14 @@ class SocketApplication(WebSocketApplication):
         cdict['token'] = cmdmesg['token']
         return self.SaltClient.signature(cdict)
 
-    def get_job(self, jid, token):
-        getcmd = {
-            'method': 'saltutil.find_job',
-            'mode': 'sync',
-            'pattern': '*',
-            'token': token,
-            'args': [jid]
-        }
-        resp = self.cmd(getcmd)
+    def get_job(self, jid):
+        resp = self.SaltClient.runnerClient.cmd('jobs.lookup_jid', [jid])
         return resp
 
     # Message and Connection Handling.
     def broadcast_event(self, e):
         for client in self.event_listeners:
-            client.ws.send(json.dumps(e))
+            client.ws.send(e)
 
     def on_open(self):
         print "Connection opened"
@@ -202,16 +224,16 @@ class SocketApplication(WebSocketApplication):
         e = []
         if 'jid' not in message:
             e.append('jid field missing')
-        if 'token' not in message:
-            e.append('token field missing')
         if len(e) != 0:
             raise InvalidMessage("Missing fields", e)
-        resp = self.get_job(message['jid'], message['token'])
+        resp = self.get_job(message['jid'])
         self.ws.send(json.dumps(resp))
 
     def on_message(self, message):
         print repr(self.ws.handler.active_client.address)
-        print message
+        if message is None:
+            # Empty message, probably a disconnect.
+            return
         """try:"""
         deser = json.loads(message)
         if deser['type'] == 'auth':
