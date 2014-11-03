@@ -11,6 +11,20 @@ from salt.client.api import APIClient
 from salt.exceptions import EauthAuthenticationError
 
 
+def get_opts():
+    '''Return the salt master config.'''
+    import salt.config
+
+    return salt.config.client_config(
+        os.environ.get('SALT_MASTER_CONFIG', '/etc/salt/master'))
+
+
+__virtualname__ = 'websocket'
+log = logging.getLogger(__virtualname__)
+if '__opts__' not in globals():
+        __opts__ = get_opts()
+
+
 class InvalidMessage(Exception):
     def __init__(self, message, errors):
         super(InvalidMessage, self).__init__(message)
@@ -24,14 +38,6 @@ def __virtual__():
         return __virtualname__
 
     return False
-
-
-def get_opts():
-    '''Return the salt master config.'''
-    import salt.config
-
-    return salt.config.client_config(
-        os.environ.get('SALT_MASTER_CONFIG', '/etc/salt/master'))
 
 
 def start():
@@ -80,11 +86,6 @@ def process_events(wss):
                     wss.broadcast_event(d)
                 except UnicodeDecodeError:
                     log.error("Non UTF-8 data in event.")
-
-__virtualname__ = 'websocket'
-log = logging.getLogger(__virtualname__)
-if '__opts__' not in globals():
-        __opts__ = get_opts()
 
 
 class SocketApplication(WebSocketApplication):
@@ -144,6 +145,10 @@ class SocketApplication(WebSocketApplication):
 
     def get_job(self, jid):
         resp = self.SaltClient.runnerClient.cmd('jobs.lookup_jid', [jid])
+        return resp
+
+    def get_active(self):
+        resp = self.SaltClient.runnerClient.cmd('jobs.active', [])
         return resp
 
     # Message and Connection Handling.
@@ -224,13 +229,11 @@ class SocketApplication(WebSocketApplication):
         self.ws.send(json.dumps(resp))
 
     def get_job_message(self, message):
-        e = []
         if 'jid' not in message:
-            e.append('jid field missing')
-        if len(e) != 0:
-            raise InvalidMessage("Missing fields", e)
-        resp = self.get_job(message['jid'])
-        self.ws.send(json.dumps({'acknowleged': resp}))
+            resp = self.get_active()
+        else:
+            resp = self.get_job(message['jid'])
+        self.ws.send(json.dumps(resp))
 
     def event_message(self, message):
         e = []
@@ -239,7 +242,7 @@ class SocketApplication(WebSocketApplication):
         if len(e) != 0:
             raise InvalidMessage("Missing fields", e)
         retval = self.SaltClient.event.fire_event(message['body'], message.get('tag', ''))
-        self.ws.send(json.dumps(retval))
+        self.ws.send(json.dumps({"acknowleged": retval}))
 
     def on_message(self, message):
         print repr(self.ws.handler.active_client.address)
