@@ -72,12 +72,8 @@ class SocketApplication(WebSocketApplication):
 
     def __init__(self, *args, **kwargs):
         self.SaltClient = APIClient()
-        Greenlet.spawn(greenlet_events, self)
+        # Greenlet.spawn(greenlet_events, self)
         super(SocketApplication, self).__init__(*args, **kwargs)
-
-    def broadcast_event(self, e):
-        for client in self.event_listeners:
-            client.ws.send(json.dumps(e))
 
     def auth(self, username, password, eauth='pam'):
         '''Authenticates a user against external auth and returns a token.'''
@@ -96,18 +92,39 @@ class SocketApplication(WebSocketApplication):
         return token
 
     def cmd(self, cmdmesg):
-        cdict = {
-            'mode': 'async'
-        }
-        # TODO: async?
+        cdict = {}
         cdict['fun'] = cmdmesg['method']
         cdict['tgt'] = cmdmesg['pattern']
+        cdict['mode'] = cmdmesg.get('mode', 'async')
         cdict['expr_form'] = cmdmesg.get('pattern_type', 'glob')
         cdict['kwarg'] = cmdmesg.get('kwargs', {})
         cdict['arg'] = cmdmesg.get('args', [])
         cdict['token'] = cmdmesg['token']
         retval = self.SaltClient.run(cdict)
         return retval
+
+    def signature(self, cmdmesg):
+        cdict = {}
+        cdict['tgt'] = cmdmesg['tgt']
+        cdict['module'] = cmdmesg['module']
+        cdict['token'] = cmdmesg['token']
+        return self.SaltClient.signature(cdict)
+
+    def get_job(self, jid, token):
+        getcmd = {
+            'method': 'saltutil.find_job',
+            'mode': 'sync',
+            'pattern': '*',
+            'token': token,
+            'args': [jid]
+        }
+        resp = self.cmd(getcmd)
+        return resp
+
+    # Message and Connection Handling.
+    def broadcast_event(self, e):
+        for client in self.event_listeners:
+            client.ws.send(json.dumps(e))
 
     def on_open(self):
         print "Connection opened"
@@ -169,32 +186,56 @@ class SocketApplication(WebSocketApplication):
             raise InvalidMessage("Unknown subscription type.")
 
     def signature_message(self, message):
-        pass
+        e = []
+        if 'tgt' not in message:
+            e.append('tgt field missing')
+        if 'module' not in message:
+            e.append('module field missing')
+        if 'token' not in message:
+            e.append('token field missing')
+        if len(e) != 0:
+            raise InvalidMessage("Missing fields", e)
+        resp = self.signature(message)
+        self.ws.send(json.dumps(resp))
+
+    def get_job_message(self, message):
+        e = []
+        if 'jid' not in message:
+            e.append('jid field missing')
+        if 'token' not in message:
+            e.append('token field missing')
+        if len(e) != 0:
+            raise InvalidMessage("Missing fields", e)
+        resp = self.get_job(message['jid'], message['token'])
+        self.ws.send(json.dumps(resp))
 
     def on_message(self, message):
         print repr(self.ws.handler.active_client.address)
         print message
-        try:
-            deser = json.loads(message)
-            if deser['type'] == 'auth':
-                self.auth_message(deser)
-            elif deser['type'] == 'cmd':
-                self.cmd_message(deser)
-            elif deser['type'] == 'subscribe':
-                self.subscribe_message(deser)
-            elif deser['type'] == 'unsubscribe':
-                self.unsubscribe_message(deser)
-            elif deser['type'] == 'signature':
-                self.signature_message(deser)
-            elif deser['type'] == 'runner':
-                self.runner_message(deser)
-        except Exception as e:
+        """try:"""
+        deser = json.loads(message)
+        if deser['type'] == 'auth':
+            self.auth_message(deser)
+        elif deser['type'] == 'cmd':
+            self.cmd_message(deser)
+        elif deser['type'] == 'subscribe':
+            self.subscribe_message(deser)
+        elif deser['type'] == 'unsubscribe':
+            self.unsubscribe_message(deser)
+        elif deser['type'] == 'signature':
+            self.signature_message(deser)
+        elif deser['type'] == 'runner':
+            self.runner_message(deser)
+        elif deser['type'] == 'get_job':
+            self.get_job_message(deser)
+        """except Exception as e:
+            raise e
             emsg = {
-                'error': 'Invalid Message.',
+                'error': str(e),
                 'details': e.message
             }
             self.ws.send(json.dumps(emsg))
-
+"""
     def on_close(self, reason):
         print reason
 
