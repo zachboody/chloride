@@ -8,6 +8,7 @@ from geventwebsocket import WebSocketServer, WebSocketApplication, Resource
 import json
 import logging
 from salt.client.api import APIClient
+from salt.exceptions import EauthAuthenticationError
 
 
 class InvalidMessage(Exception):
@@ -137,7 +138,9 @@ class SocketApplication(WebSocketApplication):
         cdict['tgt'] = cmdmesg['tgt']
         cdict['module'] = cmdmesg['module']
         cdict['token'] = cmdmesg['token']
-        return self.SaltClient.signature(cdict)
+        j = self.SaltClient.signature(cdict)
+        resp = self.get_job(j['jid'])
+        return resp
 
     def get_job(self, jid):
         resp = self.SaltClient.runnerClient.cmd('jobs.lookup_jid', [jid])
@@ -227,37 +230,54 @@ class SocketApplication(WebSocketApplication):
         if len(e) != 0:
             raise InvalidMessage("Missing fields", e)
         resp = self.get_job(message['jid'])
-        self.ws.send(json.dumps(resp))
+        self.ws.send(json.dumps({'acknowleged': resp}))
+
+    def event_message(self, message):
+        e = []
+        if 'body' not in message:
+            e.append('no event body')
+        if len(e) != 0:
+            raise InvalidMessage("Missing fields", e)
+        retval = self.SaltClient.event.fire_event(message['body'], message.get('tag', ''))
+        self.ws.send(json.dumps(retval))
 
     def on_message(self, message):
         print repr(self.ws.handler.active_client.address)
         if message is None:
             # Empty message, probably a disconnect.
             return
-        """try:"""
-        deser = json.loads(message)
-        if deser['type'] == 'auth':
-            self.auth_message(deser)
-        elif deser['type'] == 'cmd':
-            self.cmd_message(deser)
-        elif deser['type'] == 'subscribe':
-            self.subscribe_message(deser)
-        elif deser['type'] == 'unsubscribe':
-            self.unsubscribe_message(deser)
-        elif deser['type'] == 'signature':
-            self.signature_message(deser)
-        elif deser['type'] == 'runner':
-            self.runner_message(deser)
-        elif deser['type'] == 'get_job':
-            self.get_job_message(deser)
-        """except Exception as e:
-            raise e
+        try:
+            deser = json.loads(message)
+            if deser['type'] == 'auth':
+                self.auth_message(deser)
+            elif deser['type'] == 'cmd':
+                self.cmd_message(deser)
+            elif deser['type'] == 'subscribe':
+                self.subscribe_message(deser)
+            elif deser['type'] == 'unsubscribe':
+                self.unsubscribe_message(deser)
+            elif deser['type'] == 'event':
+                self.event_message(deser)
+            elif deser['type'] == 'signature':
+                self.signature_message(deser)
+            elif deser['type'] == 'runner':
+                self.runner_message(deser)
+            elif deser['type'] == 'get_job':
+                self.get_job_message(deser)
+        except InvalidMessage as e:
             emsg = {
                 'error': str(e),
-                'details': e.message
+                'message': e.message,
+                'details': e.errors
             }
             self.ws.send(json.dumps(emsg))
-"""
+        except EauthAuthenticationError as e:
+            emsg = {
+                'error': str(e),
+                'message': e.message,
+            }
+            self.ws.send(json.dumps(emsg))
+
     def on_close(self, reason):
         print reason
 

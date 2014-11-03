@@ -1,5 +1,5 @@
 # WARNING #
-This is a massively rough, super-in progress project that is bound to be flaky, sketchy and otherwise unsuable. On top of that, it's developed against the experimental and non-public Salt APIClient.
+This is a massively rough, super-in progress project that is bound to be flaky, sketchy and otherwise unusable. On top of that, it's developed against the experimental and non-public Salt APIClient.
 
 A websocket-based API for Salt, designed primarily for server-to-server and lightweight application transport.
 
@@ -97,3 +97,21 @@ This returns a job by jid.
 ```
 Pretty straightforward, just like salt-run jobs.lookup_jid $(jid)
 
+### signature ###
+Returns the method siganture for a module method. This should be targeted at your fastest-responding relevent minion.
+```
+{
+	"type": "signature",
+	"tgt": "vagrant",
+	"token": "9d15eef4b4465bd352a32fc8eed22444",
+	"module": "test.ping"
+}
+```
+
+### event ###
+Fires an event on the event bus. This will eventually require a token!
+{
+	"type": "event",
+	"body": {"test": true},
+	"tag": "/test/noise"
+}
