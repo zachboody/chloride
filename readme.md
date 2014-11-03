@@ -67,10 +67,33 @@ Example message:
 	'pattern_type': 'glob',
 	'token': 'a2822c3247c15755c7e17fa5686d40c7'
 }
-
+```
 There are a few moving pieces to this format.
 For example, if you leave pattern_type out, it defaults to glob.
 
 args is either a list for positional arguments.
 kwargs is an object for keyword arguments.
 Both can be left out for no arguments.
+
+This returns a jid immediately.
+
+### subscribe ###
+This subscribes you to the events stream.
+```
+{
+	"type": "subscribe",
+	"subscription": "event"
+}
+```
+This puts you on the broadcast list for the events stream, which tends to be a fair amount of useful traffic.
+
+### get_job ###
+This returns a job by jid.
+```
+{
+	"type": "get_job",
+	"jid": "20141103073312975821"
+}
+```
+Pretty straightforward, just like salt-run jobs.lookup_jid $(jid)
+
