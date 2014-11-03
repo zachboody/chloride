@@ -7,8 +7,10 @@ import os
 from geventwebsocket import WebSocketServer, WebSocketApplication, Resource
 import json
 import logging
+from time import time
 from salt.client.api import APIClient
 from salt.exceptions import EauthAuthenticationError
+import hashlib
 
 
 def get_opts():
@@ -84,8 +86,20 @@ def process_events(wss):
             if d:
                 try:
                     wss.broadcast_event(d)
-                except UnicodeDecodeError:
-                    log.error("Non UTF-8 data in event.")
+                except Exception as e:
+                    print e.message
+
+
+def cmd_sync_waiter(wsapp, cmdobj, sname):
+    ret = wsapp.SaltClient.run(cmdobj)
+    cli = wsapp.sockmap.get(sname, None)
+    if cli is None:
+        return
+    try:
+        cli.ws.send(json.dumps({'type': 'cmd', 'body': ret}))
+    except:
+        # Retry
+        cli.ws.send(json.dumps({'type': 'cmd', 'body': ret}))
 
 
 class SocketApplication(WebSocketApplication):
@@ -93,6 +107,7 @@ class SocketApplication(WebSocketApplication):
     event_listeners = []
     job_listeners = []
     event_queue = Queue()
+    sockmap = {}
 
     def __init__(self, *args, **kwargs):
         self.SaltClient = APIClient()
@@ -131,8 +146,16 @@ class SocketApplication(WebSocketApplication):
         cdict['kwarg'] = cmdmesg.get('kwargs', {})
         cdict['arg'] = cmdmesg.get('args', [])
         cdict['token'] = cmdmesg['token']
-        retval = self.SaltClient.run(cdict)
-        return retval
+        if cdict['mode'] == 'async':
+            # Async, so we can block and wait.
+            retval = self.SaltClient.run(cdict)
+            self.ws.send(json.dumps({'type': 'cmd', 'body': retval}))
+        else:
+            # Spawn a greenlet, then return.
+            sname = cdict['fun'] + str(time())
+            self.sockmap[sname] = self.ws.handler.active_client
+            Greenlet.spawn(cmd_sync_waiter, self, cdict, sname)
+            return
 
     def signature(self, cmdmesg):
         cdict = {}
@@ -153,11 +176,20 @@ class SocketApplication(WebSocketApplication):
 
     # Message and Connection Handling.
     def broadcast_event(self, e):
-        for client in self.event_listeners:
+        for cm in self.event_listeners:
+            client = self.sockmap[cm]
             client.ws.send(e)
 
+    def hash_conn(self):
+        m = hashlib.md5()
+        m.update(str(self.ws.handler.active_client.address[0]))
+        m.update(str(self.ws.handler.active_client.address[1]))
+        return m.hexdigest()
+
     def on_open(self):
-        print "Connection opened"
+        h = self.hash_conn()
+        print "Connection opened as {0}".format(h)
+        self.sockmap[h] = self.ws.handler.active_client
 
     def auth_message(self, message):
         e = []
@@ -168,7 +200,7 @@ class SocketApplication(WebSocketApplication):
         if len(e) != 0:
             raise InvalidMessage("Missing fields", e)
         t = self.auth(message['username'], message['password'], message.get('eauth', 'pam'))
-        self.ws.send(json.dumps(t))
+        self.ws.send(json.dumps({'type': 'auth', 'body': t}))
 
     def runner_message(self, message):
         pass
@@ -183,8 +215,7 @@ class SocketApplication(WebSocketApplication):
             e.append('token missing')
         if len(e) != 0:
             raise InvalidMessage("Missing fields", e)
-        resp = self.cmd(message)
-        self.ws.send(json.dumps(resp))
+        self.cmd(message)
 
     def subscribe_message(self, message):
         '''This subscribes the socket to all events.'''
@@ -194,9 +225,9 @@ class SocketApplication(WebSocketApplication):
         if len(e) != 0:
             raise InvalidMessage("Missing fields", e)
         if message['subscription'] == 'event':
-            self.event_listeners.append(self.ws.handler.active_client)
+            self.event_listeners.append(self.hash_conn())
         elif message['subscription'] == 'job':
-            self.susbscribed_jobs = True
+            pass
         else:
             raise InvalidMessage("Unknown subscription type.")
 
@@ -208,10 +239,9 @@ class SocketApplication(WebSocketApplication):
         if len(e) != 0:
             raise InvalidMessage("Missing fields", e)
         if message['subscription'] == 'event':
-                self.event_listeners.remove(self.ws.handler.active_client)
+                self.event_listeners.pop(self.hash_conn(), None)
         elif message['subscription'] == 'job':
-            if self.job_greenlet:
-                self.job_greenlet.kill()
+            pass
         else:
             raise InvalidMessage("Unknown subscription type.")
 
@@ -233,7 +263,7 @@ class SocketApplication(WebSocketApplication):
             resp = self.get_active()
         else:
             resp = self.get_job(message['jid'])
-        self.ws.send(json.dumps(resp))
+        self.ws.send(json.dumps({'type': 'get_job', 'body': resp}))
 
     def event_message(self, message):
         e = []
@@ -242,7 +272,7 @@ class SocketApplication(WebSocketApplication):
         if len(e) != 0:
             raise InvalidMessage("Missing fields", e)
         retval = self.SaltClient.event.fire_event(message['body'], message.get('tag', ''))
-        self.ws.send(json.dumps({"acknowleged": retval}))
+        self.ws.send(json.dumps({"type": "event", "acknowleged": retval}))
 
     def on_message(self, message):
         print repr(self.ws.handler.active_client.address)
@@ -250,7 +280,10 @@ class SocketApplication(WebSocketApplication):
             # Empty message, probably a disconnect.
             return
         try:
-            deser = json.loads(message)
+            try:
+                deser = json.loads(message)
+            except:
+                raise InvalidMessage("Could not deserialize message. Is it valid json?")
             if deser['type'] == 'auth':
                 self.auth_message(deser)
             elif deser['type'] == 'cmd':
@@ -282,7 +315,9 @@ class SocketApplication(WebSocketApplication):
             self.ws.send(json.dumps(emsg))
 
     def on_close(self, reason):
-        print reason
+        h = self.hash_conn()
+        self.sockmap.pop(h, None)
+        print "{0}: closed, {1}".format(h, reason)
 
 if __name__ == '__main__':
     start()
