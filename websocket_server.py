@@ -96,10 +96,10 @@ def cmd_sync_waiter(wsapp, cmdobj, sname):
     if cli is None:
         return
     try:
-        cli.ws.send(json.dumps({'type': 'cmd', 'body': ret}))
+        cli.ws.send(json.dumps({'type': 'cmd', 'fun': cmdobj['fun'], 'tgt': cmdobj['tgt'], 'body': ret}))
     except:
         # Retry
-        cli.ws.send(json.dumps({'type': 'cmd', 'body': ret}))
+        cli.ws.send(json.dumps({'type': 'cmd', 'fun': cmdobj['fun'], 'tgt': cmdobj['tgt'], 'body': ret}))
 
 
 class SocketApplication(WebSocketApplication):
