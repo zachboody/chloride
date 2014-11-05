@@ -102,10 +102,10 @@ def cmd_sync_waiter(wsapp, cmdobj, sname):
     echodict['result'] = ret
     echodict['username'] = u['name']
     try:
-        cli.ws.send(json.dumps(echodict))
+        cli.ws.send(json.dumps({'type': 'cmd', 'fun': cmdobj['fun'], 'tgt': cmdobj['tgt'], 'body': ret}))
     except:
         # Retry
-        cli.ws.send(json.dumps(echodict))
+        cli.ws.send(json.dumps({'type': 'cmd', 'fun': cmdobj['fun'], 'tgt': cmdobj['tgt'], 'body': ret}))
 
 
 class SocketApplication(WebSocketApplication):
