@@ -112,20 +112,25 @@ Returns the method siganture for a module method. This should be targeted at you
 
 ### event ###
 Fires an event on the event bus. This will eventually require a token!
+```
 {
 	"type": "event",
 	"body": {"test": true},
 	"tag": "/test/noise"
 }
+```
 
 ### validate ###
 Validates a token and returns the username and info around it.
+```
 {
 	"type": "validate",
 	"token": "9d15eef4b4465bd352a32fc8eed22444"
 }
+```
 
 Returns:
+```
 {
 	"name": "vagrant",
 	"start": 1415149293.733322,
@@ -134,3 +139,4 @@ Returns:
 	"eauth": "pam",
 	"valid": true
 }
+```
