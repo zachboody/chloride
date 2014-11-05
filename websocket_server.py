@@ -208,7 +208,6 @@ class SocketApplication(WebSocketApplication):
         self.ws.send(json.dumps(retval))
 
     def broadcast_event(self, e):
-        e = json.loads(e)
         for cm in self.event_listeners:
             client = self.sockmap[cm]
             client.ws.send(e)
@@ -338,7 +337,6 @@ class SocketApplication(WebSocketApplication):
         except InvalidMessage as e:
             emsg = {
                 'error': str(e),
-                'message': e.message,
                 'details': e.errors
             }
             self.ws.send(json.dumps(emsg))
