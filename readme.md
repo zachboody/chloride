@@ -64,6 +64,7 @@ Example message:
 	'type': 'cmd',
 	'method': 'test.ping',
 	'pattern': '*',
+	'mode': 'async'
 	'pattern_type': 'glob',
 	'token': 'a2822c3247c15755c7e17fa5686d40c7'
 }
@@ -75,7 +76,8 @@ args is either a list for positional arguments.
 kwargs is an object for keyword arguments.
 Both can be left out for no arguments.
 
-This returns a jid immediately.
+Mode determines the return value you get. Async responds with a JID immediately, where "sync" waits and replies with the results.
+Both echo the properties passed into it, with the exception of token, which is replaced by the username of the executing user.
 
 ### subscribe ###
 This subscribes you to the events stream.
@@ -114,4 +116,21 @@ Fires an event on the event bus. This will eventually require a token!
 	"type": "event",
 	"body": {"test": true},
 	"tag": "/test/noise"
+}
+
+### validate ###
+Validates a token and returns the username and info around it.
+{
+	"type": "validate",
+	"token": "9d15eef4b4465bd352a32fc8eed22444"
+}
+
+Returns:
+{
+	"name": "vagrant",
+	"start": 1415149293.733322,
+	"token": "9f1fc7bd0e3c9ebbd1f80e67fa1147da",
+	"expire": 1415192493.733323,
+	"eauth": "pam",
+	"valid": true
 }

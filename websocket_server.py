@@ -7,6 +7,7 @@ import os
 from geventwebsocket import WebSocketServer, WebSocketApplication, Resource
 import json
 import logging
+from copy import deepcopy
 from time import time
 from salt.client.api import APIClient
 from salt.exceptions import EauthAuthenticationError
@@ -28,7 +29,7 @@ if '__opts__' not in globals():
 
 
 class InvalidMessage(Exception):
-    def __init__(self, message, errors):
+    def __init__(self, message, errors=[]):
         super(InvalidMessage, self).__init__(message)
         self.errors = errors
 
@@ -95,11 +96,16 @@ def cmd_sync_waiter(wsapp, cmdobj, sname):
     cli = wsapp.sockmap.get(sname, None)
     if cli is None:
         return
+    echodict = deepcopy(cmdobj)
+    u = wsapp.validate_token(cmdobj['token'])
+    echodict.pop('token')
+    echodict['result'] = ret
+    echodict['username'] = u['name']
     try:
-        cli.ws.send(json.dumps({'type': 'cmd', 'body': ret}))
+        cli.ws.send(json.dumps(echodict))
     except:
         # Retry
-        cli.ws.send(json.dumps({'type': 'cmd', 'body': ret}))
+        cli.ws.send(json.dumps(echodict))
 
 
 class SocketApplication(WebSocketApplication):
@@ -120,6 +126,14 @@ class SocketApplication(WebSocketApplication):
         self.event_listener_proc.kill()
         self.event_processor.kill()
         super(SocketApplication, self).__del__(*args, **kwargs)
+
+    def validate_token(self, token):
+        r = self.SaltClient.verify_token(token)
+        if not r:
+            r = {"start": '', "token": token, "expire": '', "name": '', "eauth": '', "valid": False}
+        else:
+            r['valid'] = True
+        return r
 
     def auth(self, username, password, eauth='pam'):
         '''Authenticates a user against external auth and returns a token.'''
@@ -146,10 +160,18 @@ class SocketApplication(WebSocketApplication):
         cdict['kwarg'] = cmdmesg.get('kwargs', {})
         cdict['arg'] = cmdmesg.get('args', [])
         cdict['token'] = cmdmesg['token']
+        u = self.validate_token(cmdmesg['token'])
+        if not u['valid']:
+            raise EauthAuthenticationError("Invalid token")
         if cdict['mode'] == 'async':
             # Async, so we can block and wait.
             retval = self.SaltClient.run(cdict)
-            self.ws.send(json.dumps({'type': 'cmd', 'body': retval}))
+            echodict = deepcopy(cmdmesg)
+            echodict.pop('token')
+            echodict['minions'] = retval['minions']
+            echodict['jid'] = retval['jid']
+            echodict['username'] = u['name']
+            self.ws.send(json.dumps(echodict))
         else:
             # Spawn a greenlet, then return.
             sname = cdict['fun'] + str(time())
@@ -175,6 +197,15 @@ class SocketApplication(WebSocketApplication):
         return resp
 
     # Message and Connection Handling.
+    def validate_token_message(self, message):
+        e = []
+        if 'token' not in message:
+            e.append("token field missing")
+        if len(e) != 0:
+            raise InvalidMessage("Missing fields", e)
+        retval = self.validate_token(message['token'])
+        self.ws.send(json.dumps(retval))
+
     def broadcast_event(self, e):
         for cm in self.event_listeners:
             client = self.sockmap[cm]
@@ -300,6 +331,8 @@ class SocketApplication(WebSocketApplication):
                 self.runner_message(deser)
             elif deser['type'] == 'get_job':
                 self.get_job_message(deser)
+            elif deser['type'] == 'validate':
+                self.validate_token_message(deser)
         except InvalidMessage as e:
             emsg = {
                 'error': str(e),
