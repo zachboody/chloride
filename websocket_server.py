@@ -207,6 +207,7 @@ class SocketApplication(WebSocketApplication):
         self.ws.send(json.dumps(retval))
 
     def broadcast_event(self, e):
+        e['type'] = 'event'
         for cm in self.event_listeners:
             client = self.sockmap[cm]
             client.ws.send(e)
