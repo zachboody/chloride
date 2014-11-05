@@ -89,7 +89,8 @@ def process_events(wss):
                 try:
                     wss.broadcast_event(d)
                 except Exception as e:
-                    print e.message
+                    print(type(e))
+                    print e
 
 
 def cmd_sync_waiter(wsapp, cmdobj, sname):
@@ -271,7 +272,7 @@ class SocketApplication(WebSocketApplication):
         if len(e) != 0:
             raise InvalidMessage("Missing fields", e)
         if message['subscription'] == 'event':
-                self.event_listeners.pop(self.hash_conn(), None)
+                self.event_listeners.remove(self.hash_conn())
         elif message['subscription'] == 'job':
             pass
         else:
@@ -350,6 +351,7 @@ class SocketApplication(WebSocketApplication):
     def on_close(self, reason):
         h = self.hash_conn()
         self.sockmap.pop(h, None)
+        self.event_listeners.remove(self.hash_conn())
         print "{0}: closed, {1}".format(h, reason)
 
 if __name__ == '__main__':
