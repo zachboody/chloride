@@ -4,3 +4,4 @@ gevent-websocket
 greenlet==0.4.5
 msgpack-python
 salt-api
+zerorpc

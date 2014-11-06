@@ -1,7 +1,7 @@
 # WARNING #
 This is a massively rough, super-in progress project that is bound to be flaky, sketchy and otherwise unusable. On top of that, it's developed against the experimental and non-public Salt APIClient.
 
-A websocket-based API for Salt, designed primarily for server-to-server and lightweight application transport.
+A zerorpc-based API for Salt, designed primarily for server-to-server and lightweight application transport.
 
 A salt master is set up with Vagrant added to PAM auth for easy testing, default username/password is vagrant/vagrant. The virtual machine is also running the minion, so there is at least one machine to manage.
 
@@ -11,104 +11,128 @@ salt -T -a pam '*' test.ping
 
 In a python shell:
 ```
-import json
-from websocket import create_connection
-ws = create_connection("ws://127.0.0.1:8000/")
-m = {'type': 'auth', 'username': 'vagrant', 'password': 'vagrant'}
-ws.send(json.dumps(m))
-ws.recv()
+import zerorpc
+c = zerorpc.Client()
+c.connect("tcp://127.0.0.1:8000/")
+c.auth('vagrant', 'vagrant', 'pam')
 ```
 
 
 # Message Types #
-Most of the API is a pretty standard message-> response pattern. It's async with no guaranteed message order, so callbacks are your friend.
+Most of the API is a pretty standard RPC pattern.
 
-The exception is the 'subscribe' message type, which sets your socket up to recieve a message stream, either from the event bus or the jobs stream.
+The exception is the 'event_stream' call, which yields events from the Salt event stream.
 
-The messages and responses are (for now) JSON. I'll eventually look at some form of more efficent serializaton format. (msgpack, for instance.)
+The messages and responses are python dicts. ZeroRPC uses msgpack internally, so it's fairly efficient.
 
 ### auth ###
 This is used to generate a token for the further message types.
 
-Example message:
+Example call:
+`c.auth('vagrant', 'vagrant')`
+
+Successful Response:
 ```
-{ 
-	'type': 'auth',
-	'username': 'vagrant',
-	'password': 'vagrant'
+{
+	'eauth': 'pam',
+	'expire': 1415287682.240218,
+	'name': 'vagrant',
+	'perms': ['.*', '@runner', '@wheel'],
+	'start': 1415244482.240218,
+	'token': 'bd935538733fba062d022f0f01f332e3',
+	'user': 'vagrant',
+	'username': 'vagrant'
 }
 ```
+
+Failed Response:
+```
+{
+	'details': 'Authentication failed with provided credentials.',
+	'error': 'Invalid credentials'
+}
+```
+
 You can optionally include an 'eauth' parameter to set the auth type.
 It defaults to pam if left out.
 
-Example response:
-```
-{
-	"username": "vagrant",
-	"name": "vagrant",
-	"perms": [".*", "@runner", "@wheel"],
-	"start": 1414873954.974579,
-	"token": "de7f428a61a8ab799d44e764067b0efd",
-	"expire": 1414917154.974582,
-	"user": "vagrant",
-	"eauth": "pam"
-}
-```
 
 ### cmd ###
 This runs a command, given a command, target pattern, and token.
 
-Example message:
+Example call:
 ```
-{
-	'type': 'cmd',
-	'method': 'test.ping',
-	'pattern': '*',
-	'mode': 'async'
-	'pattern_type': 'glob',
-	'token': 'a2822c3247c15755c7e17fa5686d40c7'
+cmd = {
+	'fun': 'test.ping',
+	'tgt': '*',
+	'mode': 'async',
+	'expr_form': 'glob',
+	'kwarg': {},
+	'arg': [],
+	'token': 'fe4640ee430cf86331aad9671841bdec'
 }
+c.cmd(cmd)
 ```
 There are a few moving pieces to this format.
-For example, if you leave pattern_type out, it defaults to glob.
 
 args is either a list for positional arguments.
 kwargs is an object for keyword arguments.
 Both can be left out for no arguments.
+expr_form defaults to glob and can be left out.
 
 Mode determines the return value you get. Async responds with a JID immediately, where "sync" waits and replies with the results.
 Both echo the properties passed into it, with the exception of token, which is replaced by the username of the executing user.
 
-### subscribe ###
-This subscribes you to the events stream.
+Example Async response:
 ```
 {
-	"type": "subscribe",
-	"subscription": "event"
+	'arg': [],
+	'expr_form': 'glob',
+	'fun': 'test.ping',
+	'jid': '20141106034644575012',
+	'kwarg': {},
+	'minions': ['vagrant'],
+	'mode': 'async',
+	'tgt': '*',
+	'username': 'vagrant'
 }
+```
+
+Example Sync response:
+```
+{
+	'arg': [],
+	'expr_form': 'glob',
+	'fun': 'test.ping',
+	'kwarg': {},
+	'mode': 'sync',
+	'result': {},
+	'tgt': '*',
+	'username': 'vagrant'
+}
+```
+
+### event_stream ###
+This streams events from the salt event stream.
+```
+c.event_stream(token)
 ```
 This puts you on the broadcast list for the events stream, which tends to be a fair amount of useful traffic.
 
 ### get_job ###
 This returns a job by jid.
 ```
-{
-	"type": "get_job",
-	"jid": "20141103073312975821"
-}
+c.get_job(jid)
 ```
 Pretty straightforward, just like salt-run jobs.lookup_jid $(jid)
 
 ### signature ###
-Returns the method siganture for a module method. This should be targeted at your fastest-responding relevent minion.
+Returns the method siganture for a module method. This should be targeted at your fastest-responding relevent minion. (I run a minion on the master for this very reason.)
 ```
-{
-	"type": "signature",
-	"tgt": "vagrant",
-	"token": "9d15eef4b4465bd352a32fc8eed22444",
-	"module": "test.ping"
-}
+# minion pattern, method/module, token
+c.signature('vagrant', 'cmd.run', 'fe4640ee430cf86331aad9671841bdec')
 ```
+
 
 ### event ###
 Fires an event on the event bus. This will eventually require a token!
@@ -123,10 +147,7 @@ Fires an event on the event bus. This will eventually require a token!
 ### validate ###
 Validates a token and returns the username and info around it.
 ```
-{
-	"type": "validate",
-	"token": "9d15eef4b4465bd352a32fc8eed22444"
-}
+c.validate(token)
 ```
 
 Returns:

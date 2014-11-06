@@ -531,5 +531,5 @@ external_auth:
       - '@runner'
       - '@wheel'
 
-websocket:
+zerorpc:
   port: 8000
