@@ -57,6 +57,7 @@ def start():
 
     s = zerorpc.Server(ZeroServer())
     s.bind("tcp://0.0.0.0:{0}".format(mod_opts['port']))
+    print "Starting RPC server on port: {0}".format(mod_opts['port'])
     s.run()
 
 
@@ -167,6 +168,9 @@ class ZeroServer(object):
         cdict['token'] = token
         j = self.SaltClient.signature(cdict)
         resp = self.get_job(j['jid'])
+        while len(resp) == 0:
+            sleep(1)
+            resp = self.get_job(j['jid'])
         return resp
 
     def get_job(self, jid):
