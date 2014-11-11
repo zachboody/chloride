@@ -9,10 +9,8 @@ import zerorpc
 import json
 import logging
 from copy import deepcopy
-from time import time
 from salt.client.api import APIClient
 from salt.exceptions import EauthAuthenticationError
-import hashlib
 
 
 def get_opts():
@@ -160,6 +158,15 @@ class ZeroServer(object):
             echodict['result'] = retval
         echodict['username'] = u['name']
         return echodict
+
+    def runner_sync(self, cmdmesg):
+        u = self.validate_token(cmdmesg['token'])
+        if not u['valid']:
+            raise EauthAuthenticationError("Invalid token")
+        # elif '@runner' not in u['perms']:
+            # raise EauthAuthenticationError("Insufficient permissions")
+        resp = self.SaltClient.runnerClient.cmd(cmdmesg['fun'], cmdmesg['arg'])
+        return resp
 
     def signature(self, tgt, module, token):
         cdict = {}
