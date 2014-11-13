@@ -130,43 +130,68 @@ class ZeroServer(object):
 
     def auth(self, username, password, eauth='pam'):
         '''Authenticates a user against external auth and returns a token.'''
-        try:
-            token = self.SaltClient.create_token({
-                'username': username,
-                'password': password,
-                'eauth': eauth
-            })
-        except:
-            token = {
-                'error': 'Invalid credentials',
-                'details': 'Authentication failed with provided credentials.'
-            }
+        def subprocess_auth(msg, q):
+            from salt.client.api import APIClient
+            import json
+            SaltClient = APIClient()
+            try:
+                token = SaltClient.create_token(msg)
+            except:
+                token = {
+                    'error': 'Invalid credentials',
+                    'details': 'Authentication failed with provided credentials.'
+                }
+            q.put(json.dumps(token))
 
-        return token
+        q = GQueue()
+        msg = {
+            'username': username,
+            'password': password,
+            'eauth': eauth
+        }
+        subprocess_auth(msg, q)
+        token = q.get()
+        return json.loads(token)
 
     def cmd(self, cmdmesg):
-        u = self.validate_token(cmdmesg['token'])
-        if not u['valid']:
-            raise EauthAuthenticationError("Invalid token")
-        retval = self.SaltClient.run(cmdmesg)
-        echodict = deepcopy(cmdmesg)
-        echodict.pop('token')
-        if cmdmesg.get('mode', 'async') == 'async':
-            echodict['minions'] = retval['minions']
-            echodict['jid'] = retval['jid']
-        else:
-            echodict['result'] = retval
-        echodict['username'] = u['name']
-        return echodict
+        def subprocess_cmd(msg, q):
+            from salt.client.api import APIClient
+            import json
+            SaltClient = APIClient()
+            u = SaltClient.verify_token(msg['token'])
+            if not u:
+                q.put({"error": "Invalid token"})
+                return
+            retval = SaltClient.run(msg)
+            echodict = deepcopy(msg)
+            echodict.pop('token')
+            if msg.get('mode', 'async') == 'async':
+                echodict['minions'] = retval['minions']
+                echodict['jid'] = retval['jid']
+            else:
+                echodict['result'] = retval
+            echodict['username'] = u['name']
+            q.put(json.dumps(echodict))
+        q = GQueue()
+        subprocess_cmd(cmdmesg, q)
+        retval = q.get()
+        return json.loads(retval)
 
     def runner_sync(self, cmdmesg):
-        u = self.validate_token(cmdmesg['token'])
-        if not u['valid']:
-            raise EauthAuthenticationError("Invalid token")
-        # elif '@runner' not in u['perms']:
-            # raise EauthAuthenticationError("Insufficient permissions")
-        resp = self.SaltClient.runnerClient.cmd(cmdmesg['fun'], cmdmesg['arg'])
-        return resp
+        def subprocess_runner(msg, q):
+            from salt.client.api import APIClient
+            import json
+            SaltClient = APIClient()
+            u = SaltClient.verify_token(msg['token'])
+            if not u:
+                q.put({"error": "Invalid token"})
+                return
+            resp = SaltClient.runnerClient.cmd(cmdmesg['fun'], cmdmesg['arg'])
+            q.put(json.dumps(resp))
+        q = GQueue()
+        subprocess_runner(cmdmesg, q)
+        retval = q.get()
+        return json.loads(retval)
 
     def signature(self, tgt, module, token):
         cdict = {}
@@ -180,13 +205,41 @@ class ZeroServer(object):
             resp = self.get_job(j['jid'])
         return resp
 
+    def get_minions(self, mid='*'):
+        def subprocess_minon(mid, q):
+            from salt.client.api import APIClient
+            import json
+            SaltClient = APIClient()
+            resp = SaltClient.runnerClient.cmd('cache.grains', mid)
+            q.put(json.dumps(resp))
+        q = GQueue()
+        subprocess_minon(mid, q)
+        retval = q.get()
+        return json.loads(retval)
+
     def get_job(self, jid):
-        resp = self.SaltClient.runnerClient.cmd('jobs.lookup_jid', [jid])
-        return resp
+        def subprocess_job(jid, q):
+            from salt.client.api import APIClient
+            import json
+            SaltClient = APIClient()
+            resp = SaltClient.runnerClient.cmd('jobs.lookup_jid', jid)
+            q.put(json.dumps(resp))
+        q = GQueue()
+        subprocess_job(jid, q)
+        retval = q.get()
+        return json.loads(retval)
 
     def get_active(self):
-        resp = self.SaltClient.runnerClient.cmd('jobs.active', [])
-        return resp
+        def subprocess_job(q):
+            from salt.client.api import APIClient
+            import json
+            SaltClient = APIClient()
+            resp = SaltClient.runnerClient.cmd('jobs.active')
+            q.put(json.dumps(resp))
+        q = GQueue()
+        subprocess_job(q)
+        retval = q.get()
+        return json.loads(retval)
 
     def broadcast_event(self, e):
         for q in self.event_listeners:
